@@ -1,5 +1,6 @@
 package com.c4cydonia.file.metadata.service.impl;
 
+import com.c4cydonia.file.metadata.config.mapper.FileMetadataMapper;
 import com.c4cydonia.file.metadata.exception.FileException;
 import com.c4cydonia.file.metadata.model.FileMetadata;
 import com.c4cydonia.file.metadata.model.FileMetadataRequestDto;
@@ -10,6 +11,7 @@ import com.c4cydonia.file.metadata.service.IFileService;
 import com.c4cydonia.file.metadata.service.IStorageService;
 import lombok.AllArgsConstructor;
 import org.apache.commons.io.FilenameUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.tika.Tika;
 import org.apache.tika.io.TikaInputStream;
 import org.modelmapper.ModelMapper;
@@ -50,12 +52,15 @@ public class FileService implements IFileService {
         // TODO - Handle save conflicts
         String uuid = UUID.randomUUID().toString();
 
-        String fileUrl = storageService.constructFileUrl(uuid, file.getOriginalFilename());
+        // CHANGES - file Name logic, let's set a default
+        String fileName = StringUtils.firstNonBlank(fileMetadataDto.getFileName(), file.getOriginalFilename());
+        // Update the constructFile to take the new name, validation in uploadFile_WithDynamicUrl_ReturnsCorrectResponse
+        String fileUrl = storageService.constructFileUrl(uuid, fileName);
 
         var instantNow = Instant.now();
         FileMetadata fileMetadata = FileMetadata.builder()
                 .fileId(uuid)
-                .fileName(file.getOriginalFilename())
+                .fileName(fileName)
                 .fileSize(file.getSize())
                 .contentType(file.getContentType())
                 .createdBy(createdBy)
@@ -128,8 +133,8 @@ public class FileService implements IFileService {
                 .orElseThrow(() -> new FileException(HttpStatus.NOT_FOUND, "File not found"));
     }
 
-    // TODO - Search by bulk
-    // TODO - This will help with a possible test where some files were found and others not
+    // OPTIONAL - Search by bulk
+    // This could help with a possible test where some files were found and others not
 
     private void validateOwnership(FileMetadata fileMetadata, String requesterEmail) {
         var ownershipDetails = fileMetadata.getOwnershipDetails();
@@ -157,12 +162,17 @@ public class FileService implements IFileService {
 
         validateOwnership(fileMetadata, requesterEmail);
 
-        var ownerShipDetailsDto = updates.getOwnershipDetails();
-        var ownershipDetails = modelMapper.map(ownerShipDetailsDto, OwnershipDetails.class);
-
+        /*
+        var updatesOwnershipDetails = updates.getOwnershipDetails();
+        var ownershipDetails = modelMapper.map(updatesOwnershipDetails, OwnershipDetails.class);
         fileMetadata.setText(updates.getText());
         fileMetadata.setTitle(updates.getTitle());
         fileMetadata.setOwnershipDetails(ownershipDetails);
+         */
+
+        // TODO - Validate ownership, set default values and update what exist only
+        // Use MapStruct to update the entity with the new values
+        FileMetadataMapper.INSTANCE.updateFileMetadataFromDto(updates, fileMetadata);
         fileMetadata.setModifiedDate(Instant.now());
 
         fileRepository.save(fileMetadata);
@@ -170,6 +180,37 @@ public class FileService implements IFileService {
 
         return fileMetadataResponse;
     }
+
+    /*
+    private void manualUpdates(FileMetadataRequestDto updates, FileMetadata fileMetadata) {
+        // Update simple fields if they are not null
+        if (updates.getFileName() != null && !updates.getFileName().isBlank()) {
+            fileMetadata.setFileName(updates.getFileName());
+        }
+        if (updates.getText() != null && !updates.getText().isBlank()) {
+            fileMetadata.setText(updates.getText());
+        }
+        if (updates.getTitle() != null && !updates.getTitle().isBlank()) {
+            fileMetadata.setTitle(updates.getTitle());
+        }
+
+        // Handle ownership details separately to avoid nullification
+        if (updates.getOwnershipDetails() != null) {
+            OwnershipRequestDto updatesOwnershipDetails = updates.getOwnershipDetails();
+            OwnershipDetails existingOwnershipDetails = fileMetadata.getOwnershipDetails();
+
+            // Update only non-null fields of ownership details
+            if (updatesOwnershipDetails.getOwners() != null && !updatesOwnershipDetails.getOwners().isEmpty()) {
+                existingOwnershipDetails.setOwners(updatesOwnershipDetails.getOwners());
+            }
+            if (updatesOwnershipDetails.getReceivers() != null) {
+                existingOwnershipDetails.setReceivers(updatesOwnershipDetails.getReceivers());
+            }
+
+            fileMetadata.setOwnershipDetails(existingOwnershipDetails);
+        }
+    }
+     */
 
     @Override
     public void deleteFile(String fileId, String requesterEmail) {
@@ -184,7 +225,7 @@ public class FileService implements IFileService {
         fileRepository.deleteById(fileMetadata.getId());
     }
 
-    // TODO - Add a method to download the file? UI can handle that part with the URL
+    // OPTIONAL - Add a method to download the file? UI can handle that part with the URL
 }
 
 

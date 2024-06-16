@@ -38,6 +38,7 @@ import static org.mockito.Mockito.*;
 class FileServiceParamTest {
     private static final String IMG_DOG = "imgs/dog.jpg";
     private static final String IMG_SOLID = "imgs/solid.png";
+    private static final String FILE_EXCEL = "imgs/excelFile.xlsx";
 
     private static final String FILE_NAME = "file";
     private static final String FILE_TEST = "test.jpg";
@@ -91,13 +92,16 @@ class FileServiceParamTest {
 
         MultipartFile emptyFile = new MockMultipartFile(FILE_NAME, FILE_TEST, TYPE_IMG, new byte[0]);
 
-        File imageFile = Paths.get(ClassLoader.getSystemResource(IMG_SOLID).toURI()).toFile();
-        var invalidFile = convertFileToMultipartFile(imageFile);
+        File pngFile = Paths.get(ClassLoader.getSystemResource(IMG_SOLID).toURI()).toFile();
+        var invalidPngFile = convertFileToMultipartFile(pngFile);
+
+        File excelFile = Paths.get(ClassLoader.getSystemResource(FILE_EXCEL).toURI()).toFile();
+        var invalidExcelFile = convertFileToMultipartFile(excelFile);
 
         return Stream.of(
                 Arguments.of(emptyFile, USER_1, emptyFileMetadataRequest, emptyFileMetadata, "No file provided"),
-                Arguments.of(invalidFile, USER_1, fileMetadataRequestDto, emptyFileMetadata, "Invalid file type")
-                // Test excel,
+                Arguments.of(invalidPngFile, USER_1, fileMetadataRequestDto, emptyFileMetadata, "Invalid file type"),
+                Arguments.of(invalidExcelFile, USER_1, fileMetadataRequestDto, emptyFileMetadata, "Invalid file type")
                 // Test audio,
                 // Test video
         );
@@ -110,48 +114,75 @@ class FileServiceParamTest {
                 .build();
     }
 
-    /**
-     * TODO - Modify this method as ParameterizedTest to test all valid file uploads.
-     *
-     * @throws Exception
-     */
-    @Test
-    void uploadFile() throws Exception {
-        var fileUrl = "http://example.com/test.jpg";
-        File imageFile = Paths.get(ClassLoader.getSystemResource(IMG_DOG).toURI()).toFile();
-        var mockFile = convertFileToMultipartFile(imageFile);
+    static Stream<Arguments> uploadTestData() throws Exception {
+        File jpgFile = Paths.get(ClassLoader.getSystemResource(IMG_DOG).toURI()).toFile();
+        var mockJpgFile = convertFileToMultipartFile(jpgFile);
 
-        var ownershipDto = buildOwnershipRequest(Set.of(USER_1), Collections.emptySet());
+        File csvFile = Paths.get(ClassLoader.getSystemResource("imgs/csvFile.csv").toURI()).toFile();
+        var mockCsvFile = convertFileToMultipartFile(csvFile);
+
+        return Stream.of(
+                Arguments.of(mockJpgFile),
+                Arguments.of(mockCsvFile)
+        );
+    }
+
+    /**
+     * Argument captor - metadataCaptor - Add, what is this?
+     * @param mockFile
+     */
+    @ParameterizedTest
+    @MethodSource("uploadTestData")
+    void uploadFile(MultipartFile mockFile) {
+        var fileUrl = "http://example.com/test.jpg";
+
+        var ownershipDto = buildOwnershipRequest(Set.of(USER_1), Set.of(USER_CREATOR));
         var requestDto = buildFileMetadataRequestDto(FILE_TEST, TEXT, TITLE, ownershipDto);
         var ownership = modelMapper.map(ownershipDto, OwnershipDetails.class);
 
-        var instantNow = Instant.now();
-        FileMetadata fileMetadata = FileMetadata.builder()
-                .fileId("UUID-1")
-                .fileName(mockFile.getOriginalFilename())
-                .fileSize(mockFile.getSize())
-                .contentType(mockFile.getContentType())
-                .createdBy(USER_CREATOR)
-                .text(requestDto.getText())
-                .title(requestDto.getTitle())
-                .fileUrl(fileUrl)
-                .ownershipDetails(ownership)
-                .createdDate(instantNow)
-                .modifiedDate(instantNow)
-                .build();
+        // CHANGES - file Name logic, let's set a default
+        var instantTime = Instant.now();
+        var fileMetadata = buildFileMetadata("UUID-1", FILE_TEST, USER_CREATOR,
+                requestDto.getText(), requestDto.getTitle(), mockFile, ownership, fileUrl, instantTime);
 
         lenient().when(storageService.constructFileUrl(anyString(), anyString())).thenReturn(fileUrl);
         lenient().when(fileRepository.save(any(FileMetadata.class))).thenReturn(fileMetadata);
 
-        FileMetadataResponseDto result = fileService.uploadFile(mockFile, "user@example.com", requestDto);
+        FileMetadataResponseDto result = fileService.uploadFile(mockFile, "user2@example.com", requestDto);
 
         assertNotNull(result);
-        verify(fileRepository).save(any(FileMetadata.class));
         verify(fileRepository, times(1)).save(any(FileMetadata.class));
 
+        verify(fileRepository).save(metadataCaptor.capture());
+        FileMetadata capturedMetadata = metadataCaptor.getValue();
+        assertNotNull(capturedMetadata);
+        assertEquals(FILE_TEST, capturedMetadata.getFileName());
+        assertEquals(TEXT, capturedMetadata.getText());
+        assertEquals(TITLE, capturedMetadata.getTitle());
+        assertEquals("user2@example.com", capturedMetadata.getCreatedBy());
+
+        assertThat(result.getFileName()).isEqualTo(FILE_TEST);
         assertThat(result.getText()).isEqualTo(TEXT);
         assertThat(result.getOwnershipDetails().getOwners().size()).isEqualTo(1);
         assertTrue(result.getOwnershipDetails().getOwners().contains(USER_1));
+    }
+
+    private FileMetadata buildFileMetadata(String fileId, String name, String creator, String text, String title,
+                                              MultipartFile mockFile, OwnershipDetails ownershipDetails, String fileUrl,
+                                              Instant instantTime) {
+        return FileMetadata.builder()
+                .fileId(fileId)
+                .fileName(name)
+                .fileSize(mockFile.getSize())
+                .contentType(mockFile.getContentType())
+                .createdBy(creator)
+                .text(text)
+                .title(title)
+                .fileUrl(fileUrl)
+                .ownershipDetails(ownershipDetails)
+                .createdDate(instantTime)
+                .modifiedDate(instantTime)
+                .build();
     }
 
     private static MultipartFile convertFileToMultipartFile(File file) throws Exception {
@@ -178,6 +209,13 @@ class FileServiceParamTest {
                 .build();
     }
 
+    /**
+     * Not parametrized version of upload, add general validation for fileUrl:
+     * - thenAnswer with dynamic URL creation, DEBUG example
+     *      - fileUrl is not visible in the response, then we need to validate in a creative way.
+     * - Argument captor example
+     * @throws Exception
+     */
     @Test
     void uploadFile_WithDynamicUrl_ReturnsCorrectResponse() throws Exception {
         // Arrange
@@ -189,33 +227,17 @@ class FileServiceParamTest {
 
         // Mocking the dynamic URL construction
         when(storageService.constructFileUrl(anyString(), anyString()))
-                .thenAnswer(invocation -> {
-                    String uuid = invocation.getArgument(0, String.class);
-                    String fileName = invocation.getArgument(1, String.class);
-                    return "http://example.com/" + uuid + "/" + fileName;
-                });
+                .thenAnswer(invocation -> "http://example.com/123456/" + FILE_TEST);
 
 
         // Mocking the fileRepository save method
-        Instant now = Instant.now();
-        FileMetadata savedFileMetadata = FileMetadata.builder()
-                .fileId("123456")
-                .fileName(FILE_TEST)
-                .fileSize(mockFile.getSize())
-                .contentType(mockFile.getContentType())
-                .createdBy(USER_1)
-                .text(TEXT)
-                .title(TITLE)
-                .fileUrl("http://example.com/123456/dog.jpg")
-                .ownershipDetails(new OwnershipDetails(Set.of(USER_1), Collections.emptySet(), USER_1))
-                .createdDate(now)
-                .modifiedDate(now)
-                .build();
+        var instantTime = Instant.now();
+        var fileUrl = "http://example.com/123456/test.jpg";
+        var ownershipDetails = new OwnershipDetails(Set.of(USER_1), Collections.emptySet(), USER_1);
+        var savedFileMetadata = buildFileMetadata("123456", FILE_TEST, USER_1, TEXT, TITLE, mockFile,
+                ownershipDetails, fileUrl, instantTime);
 
         when(fileRepository.save(any(FileMetadata.class))).thenReturn(savedFileMetadata);
-
-        // Mocking the modelMapper
-        FileMetadataResponseDto responseDto = modelMapper.map(savedFileMetadata, FileMetadataResponseDto.class);
 
         // Act
         var responseFileMetadata = fileService.uploadFile(mockFile, USER_1, requestDto);
@@ -224,10 +246,12 @@ class FileServiceParamTest {
         verify(fileRepository).save(metadataCaptor.capture());
         FileMetadata capturedMetadata = metadataCaptor.getValue();
         assertNotNull(capturedMetadata);
-        assertEquals("dog.jpg", capturedMetadata.getFileName());
+        assertEquals(FILE_TEST, capturedMetadata.getFileName());
         assertEquals(TEXT, capturedMetadata.getText());
         assertEquals(TITLE, capturedMetadata.getTitle());
         assertEquals(USER_1, capturedMetadata.getCreatedBy());
+        // Observe - Validate fileUrl value with ArgumentCaptor
+        assertEquals(fileUrl, capturedMetadata.getFileUrl());
 
         // Verify the response
         assertNotNull(responseFileMetadata);
@@ -235,8 +259,8 @@ class FileServiceParamTest {
         assertEquals(FILE_TEST, responseFileMetadata.getFileName());
         assertEquals(mockFile.getSize(), responseFileMetadata.getFileSize());
         assertEquals(mockFile.getContentType(), responseFileMetadata.getContentType());
-        assertEquals(now, responseFileMetadata.getCreatedDate());
-        assertEquals(now, responseFileMetadata.getModifiedDate());
+        assertEquals(instantTime, responseFileMetadata.getCreatedDate());
+        assertEquals(instantTime, responseFileMetadata.getModifiedDate());
         assertEquals(USER_1, responseFileMetadata.getCreatedBy());
         assertEquals(TEXT, responseFileMetadata.getText());
         assertEquals(TITLE, responseFileMetadata.getTitle());
@@ -256,7 +280,7 @@ class FileServiceParamTest {
         assertEquals(expectedMessage, exception.getMessage());
     }
 
-    static Stream<Arguments> deleteExceptionTestData() throws Exception {
+    static Stream<Arguments> deleteExceptionTestData() {
         var ownership = buildOwnership(Set.of(USER_CREATOR, USER_OWNER), Set.of(), USER_CREATOR);
         var fileMetadataToDelete = buildFileMetadata(ownership);
 
@@ -271,37 +295,6 @@ class FileServiceParamTest {
                 .receivers(receivers)
                 .addedBy(addedBy)
                 .build();
-    }
-
-    @Test
-    void updateFileMetadata() {
-        String fileId = "updatable-file-id";
-        String updatedText = "Updated Text";
-        String updatedTitle = "Updated Title";
-        var ownership = buildOwnership(Set.of(USER_CREATOR, USER_OWNER), Set.of("authorized@example.com"), USER_CREATOR);
-        var ownershipDto = modelMapper.map(ownership, OwnershipRequestDto.class);
-
-        FileMetadata existingMetadata = FileMetadata.builder()
-                .fileId(fileId)
-                .createdBy(USER_CREATOR)
-                .ownershipDetails(ownership)
-                .build();
-
-        FileMetadataRequestDto updates = FileMetadataRequestDto.builder()
-                .text(updatedText)
-                .title(updatedTitle)
-                .ownershipDetails(ownershipDto)
-                .build();
-
-        when(fileRepository.findByFileId(fileId)).thenReturn(Optional.of(existingMetadata));
-        when(fileRepository.save(any(FileMetadata.class))).thenReturn(existingMetadata);
-
-        FileMetadataResponseDto result = fileService.updateFileMetadata(fileId, updates, USER_OWNER);
-
-        assertNotNull(result);
-        verify(fileRepository).save(existingMetadata);
-        assertEquals(updatedText, existingMetadata.getText());
-        assertEquals(updatedTitle, existingMetadata.getTitle());
     }
 
     /**
@@ -333,6 +326,8 @@ class FileServiceParamTest {
         verify(fileRepository).deleteById(id);
     }
 
+    // doThrow example with a Runtime exception
+    // Mocked object verify is never called
     @Test
     void deleteFile_DoThrow() {
         String fileId = "test-file-id";
@@ -348,18 +343,21 @@ class FileServiceParamTest {
 
         when(fileRepository.findByFileId(fileId))
                 .thenReturn(Optional.of(fileMetadata));
-        doThrow(new RuntimeException("Failed to delete file"))
+        doThrow(new RuntimeException("Any runtime error"))
                 .when(storageService).deleteFile(fileId);
 
         // Act & Assert
         Exception exception = assertThrows(RuntimeException.class,
                 () -> fileService.deleteFile(fileId, requesterEmail));
-        assertEquals("Failed to delete file", exception.getMessage());
+        assertEquals("Any runtime error", exception.getMessage());
 
         // Verify that the repository delete method was not called due to the exception
         verify(fileRepository, never()).deleteById(fileId);
     }
 
+    // doAnswer example, we manipulate the response in execution time
+    // Execute, change if to return true, validate and then return again
+    //      FileException to be thrown, but nothing was thrown
     @Test
     void deleteFile_DoAnswer_doThrow() {
         String fileId = "file-id-123";
@@ -375,9 +373,11 @@ class FileServiceParamTest {
 
         when(fileRepository.findByFileId(fileId)).thenReturn(Optional.of(fileMetadata));
 
+        // Validate in DEBUG mode
         doAnswer(invocation -> {
             String id = invocation.getArgument(0);
             if (id.equals(fileId)) {
+                // TODO - Change return to true and observe
                 return false;
             }
             return true;
@@ -388,10 +388,98 @@ class FileServiceParamTest {
         assertEquals("Failed to delete file", exception.getMessage());
     }
 
-    // TODO - Update DELETE to work as parametrized test
+    // OPTIONAL - Update as parametrized test
+    @Test
+    void updateFileMetadata() {
+        String fileId = "updatable-file-id";
+        String updatedText = "Updated Text";
+        String updatedTitle = "Updated Title";
+        var userAuthorized = "authorized@example.com";
+        var ownership = buildOwnership(Set.of(USER_CREATOR, USER_OWNER), Set.of(userAuthorized), USER_CREATOR);
+        // var ownershipDto = modelMapper.map(ownership, OwnershipRequestDto.class);
 
-    // TODO - PATCH
+        FileMetadata existingMetadata = FileMetadata.builder()
+                .fileId(fileId)
+                .fileName(FILE_TEST)
+                .createdBy(USER_CREATOR)
+                .ownershipDetails(ownership)
+                .build();
+
+        FileMetadataRequestDto updates = FileMetadataRequestDto.builder()
+                .text(updatedText)
+                .title(updatedTitle)
+                .ownershipDetails(OwnershipRequestDto.builder().build())
+                .build();
+
+        when(fileRepository.findByFileId(fileId)).thenReturn(Optional.of(existingMetadata));
+        when(fileRepository.save(any(FileMetadata.class))).thenReturn(existingMetadata);
+
+        FileMetadataResponseDto result = fileService.updateFileMetadata(fileId, updates, USER_OWNER);
+
+        assertNotNull(result);
+        verify(fileRepository).save(existingMetadata);
+        assertEquals(updatedText, existingMetadata.getText());
+        assertEquals(updatedTitle, existingMetadata.getTitle());
+
+        // Assert
+        verify(fileRepository).save(metadataCaptor.capture());
+        FileMetadata capturedMetadata = metadataCaptor.getValue();
+        assertNotNull(capturedMetadata);
+        assertEquals(FILE_TEST, capturedMetadata.getFileName());
+        assertEquals(updatedText, capturedMetadata.getText());
+        assertEquals(updatedTitle, capturedMetadata.getTitle());
+        assertEquals(USER_CREATOR, capturedMetadata.getCreatedBy());
+
+        // Ownership details in the save logic
+        var ownershipDetailsToUpdate = capturedMetadata.getOwnershipDetails();
+        assertNotNull(ownershipDetailsToUpdate);
+        assertThat(ownershipDetailsToUpdate.getOwners()).isNotNull();
+        assertThat(ownershipDetailsToUpdate.getReceivers()).isNotNull();
+
+        assertThat(ownershipDetailsToUpdate.getOwners().size()).isEqualTo(2);
+        assertThat(ownershipDetailsToUpdate.getReceivers().size()).isEqualTo(1);
+
+        assertThat(ownershipDetailsToUpdate.getOwners().contains(USER_CREATOR)).isTrue();
+        assertThat(ownershipDetailsToUpdate.getReceivers().contains(userAuthorized)).isTrue();
+
+    }
 
     // TODO - Write parametrized tests for retrieveFileMetadata
+    @ParameterizedTest
+    @MethodSource("retrieveFileMetadataExceptionTestData")
+    void retrieveFileMetadataExceptionTest(String fileId, String requesterEmail, FileMetadata fileMetadata, String expectedMessage) {
+        when(fileRepository.findByFileId(fileId)).thenReturn(Optional.ofNullable(fileMetadata));
+
+        Exception exception = assertThrows(FileException.class, () -> {
+            fileService.retrieveFileMetadata(fileId, requesterEmail);
+        });
+
+        assertEquals(expectedMessage, exception.getMessage());
+    }
+
+    static Stream<Arguments> retrieveFileMetadataExceptionTestData() {
+        var fileId = "file1";
+        var ownership = buildOwnership(Set.of(USER_CREATOR, USER_OWNER), Set.of(), USER_CREATOR);
+        var fileMetadata = buildFileMetadata(ownership);
+
+        return Stream.of(
+                Arguments.of(fileId, USER_1, null, "File not found"),
+                Arguments.of(fileId, USER_1, fileMetadata, "Unauthorized access")
+        );
+    }
+
+    @Test
+    void retrieveFileMetadataTest() {
+        var fileId = "file1";
+        var ownership = buildOwnership(Set.of(USER_CREATOR, USER_OWNER), Set.of(), USER_CREATOR);
+        var fileMetadata = buildFileMetadata(ownership);
+        lenient().when(fileRepository.findByFileId(fileId)).thenReturn(Optional.of(fileMetadata));
+
+        var response = fileService.retrieveFileMetadata(fileId, USER_CREATOR);
+
+        assertNotNull(response);
+        assertThat(response.getCreatedBy()).isEqualTo(USER_CREATOR);
+        // TODO - What else should we validate?
+    }
 
 }
