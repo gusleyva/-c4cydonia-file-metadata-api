@@ -463,7 +463,9 @@ class FileServiceParamTest {
         var fileMetadata = buildFileMetadata(ownership);
 
         return Stream.of(
+                // Testing - File not found.
                 Arguments.of(fileId, USER_1, null, "File not found"),
+                // Testing - Not owner, receiver or creator
                 Arguments.of(fileId, USER_1, fileMetadata, "Unauthorized access")
         );
     }
@@ -472,6 +474,9 @@ class FileServiceParamTest {
     void retrieveFileMetadataTest() {
         var fileId = "file1";
         var ownership = buildOwnership(Set.of(USER_CREATOR, USER_OWNER), Set.of(), USER_CREATOR);
+        // Test - Is NOT owner, but is RECEIVER
+        // Test - Is NOT owner, NOT RECEIVER, is addedBy
+        // Test - Is NOT owner, NOT RECEIVER, NOT addedBy, but it is CREATOR
         var fileMetadata = buildFileMetadata(ownership);
         lenient().when(fileRepository.findByFileId(fileId)).thenReturn(Optional.of(fileMetadata));
 
